@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import random
 from typing import Annotated, Literal, Sequence, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -67,9 +69,17 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 def build_multi_agent_graph():
     """Construct and compile the LangGraph supervisor workflow."""
 
+    # Collect all API keys available in environment variables
+    api_keys = [val for key, val in os.environ.items() if key.startswith("GOOGLE_API_KEY")]
+    
+    selected_key = random.choice(api_keys) if api_keys else None
+    if selected_key:
+        logger.info(f"Selected random API key for session (Starts with: {selected_key[:8]}...)")
+
     llm = ChatGoogleGenerativeAI(
-        model="gemini-2.0-flash",
+        model="gemini-1.5-flash",
         temperature=0,
+        api_key=selected_key,
         convert_system_message_to_human=True,
         max_retries=3,
         timeout=60,
