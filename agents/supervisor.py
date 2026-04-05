@@ -64,26 +64,59 @@ Respond with ONLY a JSON object (no markdown, no extra text):
 {"next": "<task_agent|calendar_agent|notes_agent|FINISH>", "reasoning": "<one sentence>"}
 """
 
-# ── Build the multi-agent graph ────────────────────────────────────
+# ── API Key Pool ───────────────────────────────────────────────────
 
-def build_multi_agent_graph():
-    """Construct and compile the LangGraph supervisor workflow."""
+# Collect ALL keys that start with GOOGLE_API_KEY from the environment
+API_KEYS: list[str] = [
+    val for key, val in os.environ.items()
+    if key.startswith("GOOGLE_API_KEY") and val
+]
 
-    # Collect all API keys available in environment variables
-    api_keys = [val for key, val in os.environ.items() if key.startswith("GOOGLE_API_KEY")]
-    
-    selected_key = random.choice(api_keys) if api_keys else None
-    if selected_key:
-        logger.info(f"Selected random API key for session (Starts with: {selected_key[:8]}...)")
+# Track which key index to try next (round-robin)
+_key_index = 0
 
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+if API_KEYS:
+    logger.info(f"Loaded {len(API_KEYS)} Google API key(s) for rotation.")
+else:
+    logger.warning("No GOOGLE_API_KEY* found in environment!")
+
+
+def _next_api_key() -> str | None:
+    """Return the next API key in round-robin fashion."""
+    global _key_index
+    if not API_KEYS:
+        return None
+    key = API_KEYS[_key_index % len(API_KEYS)]
+    _key_index += 1
+    return key
+
+
+def _make_llm(api_key: str | None = None) -> ChatGoogleGenerativeAI:
+    """Create a fresh LLM instance with the given (or next) API key."""
+    chosen = api_key or _next_api_key()
+    if chosen:
+        logger.info(f"Using API key: {chosen[:8]}…")
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
         temperature=0,
-        api_key=selected_key,
+        api_key=chosen,
         convert_system_message_to_human=True,
-        max_retries=3,
+        max_retries=2,
         timeout=60,
     )
+
+
+# ── Build the multi-agent graph ────────────────────────────────────
+
+def build_multi_agent_graph(api_key: str | None = None):
+    """Construct and compile the LangGraph supervisor workflow.
+    
+    Args:
+        api_key: Specific API key to use. If None, picks the next key
+                 from the pool automatically.
+    """
+
+    llm = _make_llm(api_key)
 
     # ---- Sub-agents (ReAct agents compiled by LangGraph) -----------
     _task_agent = create_react_agent(llm, task_tools, prompt=TASK_AGENT_PROMPT)

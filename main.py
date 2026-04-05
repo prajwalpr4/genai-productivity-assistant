@@ -24,7 +24,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from langchain_core.messages import AIMessage, HumanMessage
 
-from agents.supervisor import build_multi_agent_graph
+from agents.supervisor import build_multi_agent_graph, API_KEYS
 from database.db import init_db
 from models.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo
 from tools.mcp_registry import registry
@@ -54,27 +54,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global reference to the compiled multi-agent graph
-graph = None
-
 
 # ── Startup / Shutdown ─────────────────────────────────────────────
 
 @app.on_event("startup")
 async def startup():
-    global graph
     logger.info("Initialising database …")
     init_db()
-
-    logger.info("Building multi-agent graph …")
-    graph = build_multi_agent_graph()
 
     # Force-import tools so they register with the MCP registry
     import tools.task_tools      # noqa: F401
     import tools.calendar_tools  # noqa: F401
     import tools.notes_tools     # noqa: F401
 
-    logger.info(f"Ready — {len(registry)} tools registered across MCP registry.")
+    logger.info(f"Ready — {len(registry)} tools registered | {len(API_KEYS)} API key(s) loaded for rotation.")
 
 
 # ── Chat endpoint ──────────────────────────────────────────────────
@@ -84,54 +77,73 @@ async def chat(req: ChatRequest):
     """
     Accept a natural-language message, route it through the multi-agent
     supervisor, and return the final response.
-    """
-    if graph is None:
-        raise HTTPException(status_code=503, detail="Agent system not ready.")
 
+    On rate-limit (429) errors, automatically retries with the next API
+    key in the rotation pool.
+    """
     logger.info(f"[session={req.session_id}] user: {req.message}")
     start = time.time()
 
-    try:
-        result = graph.invoke(
-            {
-                "messages": [HumanMessage(content=req.message)],
-                "next": "",
-                "agents_used": [],
-            }
-        )
-    except Exception as exc:
-        logger.exception("Agent invocation failed")
-        err_msg = str(exc)
-        if "quota" in err_msg.lower() or "rate" in err_msg.lower() or "429" in err_msg:
-            raise HTTPException(
-                status_code=429,
-                detail="The AI service is temporarily rate-limited. Please wait a few seconds and try again.",
+    max_attempts = max(len(API_KEYS), 1)
+    last_error = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            # Build a fresh graph with the next API key from the pool
+            graph = build_multi_agent_graph()
+
+            result = graph.invoke(
+                {
+                    "messages": [HumanMessage(content=req.message)],
+                    "next": "",
+                    "agents_used": [],
+                }
             )
-        raise HTTPException(status_code=500, detail=f"Agent error: {err_msg[:200]}")
 
-    elapsed = time.time() - start
-    logger.info(f"Completed in {elapsed:.2f}s")
+            elapsed = time.time() - start
+            logger.info(f"Completed in {elapsed:.2f}s (attempt {attempt}/{max_attempts})")
 
-    # Extract final AI message
-    ai_msgs = [
-        m for m in result["messages"]
-        if isinstance(m, AIMessage)
-    ]
-    response_text = ai_msgs[-1].content if ai_msgs else "I wasn't able to process that request."
+            # Extract final AI message
+            ai_msgs = [
+                m for m in result["messages"]
+                if isinstance(m, AIMessage)
+            ]
+            response_text = ai_msgs[-1].content if ai_msgs else "I wasn't able to process that request."
 
-    agents_used = result.get("agents_used", [])
+            agents_used = result.get("agents_used", [])
 
-    # Build step log from named messages
-    steps = []
-    for m in result["messages"]:
-        if isinstance(m, AIMessage) and getattr(m, "name", None):
-            steps.append(f"[{m.name}] {m.content[:120]}")
+            # Build step log from named messages
+            steps = []
+            for m in result["messages"]:
+                if isinstance(m, AIMessage) and getattr(m, "name", None):
+                    steps.append(f"[{m.name}] {m.content[:120]}")
 
-    return ChatResponse(
-        response=response_text,
-        agents_used=agents_used,
-        steps=steps,
-    )
+            return ChatResponse(
+                response=response_text,
+                agents_used=agents_used,
+                steps=steps,
+            )
+
+        except Exception as exc:
+            last_error = exc
+            err_msg = str(exc).lower()
+            is_rate_limit = "429" in str(exc) or "quota" in err_msg or "rate" in err_msg or "resource" in err_msg
+
+            if is_rate_limit and attempt < max_attempts:
+                logger.warning(
+                    f"Rate-limited on attempt {attempt}/{max_attempts}. "
+                    f"Rotating to next API key and retrying in 2s…"
+                )
+                time.sleep(2)
+                continue
+            else:
+                logger.exception("Agent invocation failed")
+                if is_rate_limit:
+                    raise HTTPException(
+                        status_code=429,
+                        detail="All API keys are currently rate-limited. Please wait a minute and try again.",
+                    )
+                raise HTTPException(status_code=500, detail=f"Agent error: {str(exc)[:200]}")
 
 
 # ── MCP tool discovery ─────────────────────────────────────────────
