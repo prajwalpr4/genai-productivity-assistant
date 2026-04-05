@@ -85,7 +85,8 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
-USERS_FILE = os.path.join(os.path.dirname(__file__), "database", "users.json")
+import tempfile
+USERS_FILE = os.path.join(tempfile.gettempdir(), "users.json")
 
 def load_users():
     if not os.path.exists(USERS_FILE):

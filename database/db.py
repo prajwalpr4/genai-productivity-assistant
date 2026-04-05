@@ -6,8 +6,11 @@ Uses SQLAlchemy with SQLite (easily swappable for Cloud SQL / Postgres).
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
+import tempfile
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./productivity.db")
+TEMP_DIR = tempfile.gettempdir()
+db_path = os.path.join(TEMP_DIR, "productivity.db")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{db_path}")
 
 # For SQLite we need check_same_thread=False so FastAPI threads can share the connection
 connect_args = {"check_same_thread": False} if "sqlite" in DATABASE_URL else {}
