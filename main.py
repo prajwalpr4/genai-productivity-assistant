@@ -108,7 +108,14 @@ async def chat(req: ChatRequest):
                 m for m in result["messages"]
                 if isinstance(m, AIMessage)
             ]
-            response_text = ai_msgs[-1].content if ai_msgs else "I wasn't able to process that request."
+            if ai_msgs:
+                response_text = ai_msgs[-1].content
+            else:
+                # If no agents were used, provide a helpful conversational fallback
+                response_text = (
+                    "Hello! I am your productivity assistant. I can help you manage your tasks, "
+                    "calendar events, and notes. Try asking me to 'Create a new task' or 'Schedule a meeting'!"
+                )
 
             agents_used = result.get("agents_used", [])
 
