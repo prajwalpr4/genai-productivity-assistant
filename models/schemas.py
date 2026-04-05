@@ -32,3 +32,46 @@ class HealthResponse(BaseModel):
     version: str = "1.0.0"
     agents: list[str] = []
     tools_count: int = 0
+
+
+class UserCreate(BaseModel):
+    """Schema for user registration."""
+    email: str
+    password: str
+    full_name: Optional[str] = ""
+    age: Optional[int] = None
+    gender: Optional[str] = ""
+    phone_number: Optional[str] = ""
+
+
+class UserLogin(BaseModel):
+    """Schema for user login."""
+    email: str
+    password: str
+
+
+class UserProfileUpdate(BaseModel):
+    """Schema to update a user profile."""
+    full_name: Optional[str] = None
+    age: Optional[int] = None
+    gender: Optional[str] = None
+    phone_number: Optional[str] = None
+
+
+class UserProfileResponse(BaseModel):
+    """Secure response schema for user info (no password)."""
+    id: int
+    email: str
+    full_name: str
+    age: Optional[int]
+    gender: str
+    phone_number: str
+
+    class Config:
+        from_attributes = True
+
+
+class Token(BaseModel):
+    """JWT Token response schema."""
+    access_token: str
+    token_type: str = "bearer"

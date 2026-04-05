@@ -18,15 +18,21 @@ from dotenv import load_dotenv
 
 load_dotenv()  # must happen before any Google SDK import
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.security import OAuth2PasswordBearer
 from langchain_core.messages import AIMessage, HumanMessage
+from sqlalchemy.orm import Session
+import jwt
+from passlib.context import CryptContext
+from datetime import datetime, timedelta
 
 from agents.supervisor import build_multi_agent_graph, API_KEYS
-from database.db import init_db
-from models.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo
+from database.db import init_db, get_db
+from database.models import User
+from models.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo, UserCreate, UserLogin, UserProfileUpdate, UserProfileResponse, Token
 from tools.mcp_registry import registry
 
 # ── Logging ────────────────────────────────────────────────────────
@@ -68,6 +74,99 @@ async def startup():
     import tools.notes_tools     # noqa: F401
 
     logger.info(f"Ready — {len(registry)} tools registered | {len(API_KEYS)} API key(s) loaded for rotation.")
+
+
+# ── Auth Configuration ─────────────────────────────────────────────
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-secret-hackathon-key")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = str(payload.get("sub"))
+        if user_id is None:
+            raise credentials_exception
+    except Exception:
+        raise credentials_exception
+    user = db.query(User).filter(User.id == int(user_id)).first()
+    if user is None:
+        raise credentials_exception
+    return user
+
+
+# ── Auth Routes ────────────────────────────────────────────────────
+
+@app.post("/api/v1/auth/register", response_model=Token)
+def register(user_in: UserCreate, db: Session = Depends(get_db)):
+    existing_user = db.query(User).filter(User.email == user_in.email).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    new_user = User(
+        email=user_in.email,
+        password_hash=get_password_hash(user_in.password),
+        full_name=user_in.full_name,
+        age=user_in.age,
+        gender=user_in.gender,
+        phone_number=user_in.phone_number
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    access_token = create_access_token(
+        data={"sub": str(new_user.id)}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.post("/api/v1/auth/login", response_model=Token)
+def login(user_in: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == user_in.email).first()
+    if not user or not verify_password(user_in.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+        
+    access_token = create_access_token(
+        data={"sub": str(user.id)}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/api/v1/profile", response_model=UserProfileResponse)
+def get_profile(current_user: User = Depends(get_current_user)):
+    return current_user
+
+@app.put("/api/v1/profile", response_model=UserProfileResponse)
+def update_profile(profile_in: UserProfileUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    update_data = profile_in.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(current_user, key, value)
+        
+    db.commit()
+    db.refresh(current_user)
+    return current_user
 
 
 # ── Chat endpoint ──────────────────────────────────────────────────
