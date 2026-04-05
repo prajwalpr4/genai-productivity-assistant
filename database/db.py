@@ -29,5 +29,5 @@ def get_db():
 
 def init_db():
     """Create all tables defined by models that inherit from Base."""
-    from database.models import Task, CalendarEvent, Note, User  # noqa: F401
+    from database.models import Task, CalendarEvent, Note  # noqa: F401
     Base.metadata.create_all(bind=engine)

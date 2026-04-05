@@ -55,19 +55,4 @@ class Note(Base):
         return f"<Note(id={self.id}, title='{self.title}')>"
 
 
-class User(Base):
-    """User profile for authentication and personal info."""
-    __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String(255), unique=True, index=True, nullable=False)
-    password_hash = Column(String(255), nullable=False)
-    full_name = Column(String(255), default="")
-    age = Column(Integer, nullable=True)
-    gender = Column(String(50), default="")
-    phone_number = Column(String(50), default="")
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    def __repr__(self):
-        return f"<User(id={self.id}, email='{self.email}')>"

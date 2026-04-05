@@ -75,3 +75,29 @@ class Token(BaseModel):
     """JWT Token response schema."""
     access_token: str
     token_type: str = "bearer"
+
+class TaskResponse(BaseModel):
+    id: int
+    title: str
+    status: str
+    priority: str
+    due_date: str
+
+    class Config:
+        from_attributes = True
+
+class CalendarEventResponse(BaseModel):
+    id: int
+    title: str
+    start_time: str
+    end_time: str
+    
+    class Config:
+        from_attributes = True
+
+class NoteResponse(BaseModel):
+    id: int
+    title: str
+    
+    class Config:
+        from_attributes = True

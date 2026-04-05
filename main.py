@@ -24,15 +24,16 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import OAuth2PasswordBearer
 from langchain_core.messages import AIMessage, HumanMessage
-from sqlalchemy.orm import Session
 import jwt
+import json
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 
 from agents.supervisor import build_multi_agent_graph, API_KEYS
 from database.db import init_db, get_db
-from database.models import User
-from models.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo, UserCreate, UserLogin, UserProfileUpdate, UserProfileResponse, Token
+from database.models import Task, CalendarEvent, Note
+from sqlalchemy.orm import Session
+from models.schemas import ChatRequest, ChatResponse, HealthResponse, ToolInfo, UserCreate, UserLogin, UserProfileUpdate, UserProfileResponse, Token, TaskResponse, CalendarEventResponse, NoteResponse
 from tools.mcp_registry import registry
 
 # ── Logging ────────────────────────────────────────────────────────
@@ -76,13 +77,28 @@ async def startup():
     logger.info(f"Ready — {len(registry)} tools registered | {len(API_KEYS)} API key(s) loaded for rotation.")
 
 
-# ── Auth Configuration ─────────────────────────────────────────────
+# ── Auth Configuration & JSON Storage ────────────────────────────────
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-secret-hackathon-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+
+USERS_FILE = os.path.join(os.path.dirname(__file__), "database", "users.json")
+
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=4)
 
 def get_password_hash(password):
     return pwd_context.hash(password)
@@ -99,7 +115,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_current_user(token: str = Depends(oauth2_scheme)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -112,61 +128,91 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
             raise credentials_exception
     except Exception:
         raise credentials_exception
-    user = db.query(User).filter(User.id == int(user_id)).first()
-    if user is None:
+        
+    users = load_users()
+    if user_id not in users:
         raise credentials_exception
-    return user
+        
+    return users[user_id]
 
 
 # ── Auth Routes ────────────────────────────────────────────────────
 
 @app.post("/api/v1/auth/register", response_model=Token)
-def register(user_in: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == user_in.email).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Email already registered")
+def register(user_in: UserCreate):
+    users = load_users()
+    for uid, u in users.items():
+        if u.get("email") == user_in.email:
+            raise HTTPException(status_code=400, detail="Email already registered")
+            
+    # Simple ID generation
+    new_id = str(len(users) + 1)
     
-    new_user = User(
-        email=user_in.email,
-        password_hash=get_password_hash(user_in.password),
-        full_name=user_in.full_name,
-        age=user_in.age,
-        gender=user_in.gender,
-        phone_number=user_in.phone_number
-    )
-    db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    new_user = {
+        "id": int(new_id),
+        "email": user_in.email,
+        "password_hash": get_password_hash(user_in.password),
+        "full_name": user_in.full_name,
+        "age": user_in.age,
+        "gender": user_in.gender,
+        "phone_number": user_in.phone_number
+    }
+    
+    users[new_id] = new_user
+    save_users(users)
     
     access_token = create_access_token(
-        data={"sub": str(new_user.id)}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        data={"sub": new_id}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/api/v1/auth/login", response_model=Token)
-def login(user_in: UserLogin, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == user_in.email).first()
-    if not user or not verify_password(user_in.password, user.password_hash):
+def login(user_in: UserLogin):
+    users = load_users()
+    the_user = None
+    for uid, u in users.items():
+        if u.get("email") == user_in.email:
+            the_user = u
+            break
+            
+    if not the_user or not verify_password(user_in.password, the_user.get("password_hash")):
         raise HTTPException(status_code=401, detail="Incorrect email or password")
         
     access_token = create_access_token(
-        data={"sub": str(user.id)}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        data={"sub": str(the_user["id"])}, expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.get("/api/v1/profile", response_model=UserProfileResponse)
-def get_profile(current_user: User = Depends(get_current_user)):
+def get_profile(current_user: dict = Depends(get_current_user)):
     return current_user
 
 @app.put("/api/v1/profile", response_model=UserProfileResponse)
-def update_profile(profile_in: UserProfileUpdate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_profile(profile_in: UserProfileUpdate, current_user: dict = Depends(get_current_user)):
+    users = load_users()
+    user_id = str(current_user["id"])
+    
     update_data = profile_in.model_dump(exclude_unset=True)
     for key, value in update_data.items():
-        setattr(current_user, key, value)
+        users[user_id][key] = value
         
-    db.commit()
-    db.refresh(current_user)
-    return current_user
+    save_users(users)
+    return users[user_id]
+
+
+# ── Dashboard Routes ───────────────────────────────────────────────
+
+@app.get("/api/v1/dashboard/tasks", response_model=list[TaskResponse])
+def get_dashboard_tasks(db: Session = Depends(get_db)):
+    return db.query(Task).order_by(Task.id.desc()).limit(5).all()
+
+@app.get("/api/v1/dashboard/events", response_model=list[CalendarEventResponse])
+def get_dashboard_events(db: Session = Depends(get_db)):
+    return db.query(CalendarEvent).order_by(CalendarEvent.id.desc()).limit(5).all()
+
+@app.get("/api/v1/dashboard/notes", response_model=list[NoteResponse])
+def get_dashboard_notes(db: Session = Depends(get_db)):
+    return db.query(Note).order_by(Note.id.desc()).limit(3).all()
 
 
 # ── Chat endpoint ──────────────────────────────────────────────────

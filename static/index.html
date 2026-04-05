@@ -129,13 +129,13 @@
             </div>
             
             <div class="nav-items">
-                <div class="nav-item active"><span>⊞</span> Dashboard</div>
-                <div class="nav-item"><span>☑</span> Task Agent</div>
-                <div class="nav-item"><span>📅</span> Calendar</div>
-                <div class="nav-item"><span>📝</span> Notes</div>
+                <div class="nav-item active" onclick="clickNav('dashboard', this)"><span>⊞</span> Dashboard</div>
+                <div class="nav-item" onclick="clickNav('Task Agent', this)"><span>☑</span> Task Agent</div>
+                <div class="nav-item" onclick="clickNav('Calendar Agent', this)"><span>📅</span> Calendar</div>
+                <div class="nav-item" onclick="clickNav('Notes Agent', this)"><span>📝</span> Notes</div>
             </div>
 
-            <button class="primary-btn"><span>+</span> New Task</button>
+            <button class="primary-btn" onclick="clickNewTask()"><span>+</span> New Task</button>
 
             <div class="profile-pill" onclick="openProfileModal()">
                 <div class="profile-avatar"></div>
@@ -203,20 +203,18 @@
                     <h3>Upcoming Tasks</h3>
                     <span style="color: var(--text-dim); cursor: pointer;">•••</span>
                 </div>
-                <div class="task-list">
-                    <div class="task-item">10/26: Finalize proposal | 4 PM</div>
-                    <div class="task-item">10/26: Prepare sync agenda | 5 PM</div>
-                    <div class="task-item" style="color: rgba(255,107,107,0.8);">10/27: Client follow-up | 10 AM</div>
+                <div class="task-list" id="widgetTasksList">
+                    <div class="task-item">Loading tasks...</div>
                 </div>
             </div>
 
             <div class="tasks-widget">
                 <div class="widget-header">
                     <h3>Recent Notes</h3>
-                    <span style="color: var(--text-dim); cursor: pointer;">•••</span>
+                    <span style="color: var(--text-dim); cursor: pointer;" onclick="fetchDashboardData()">↻</span>
                 </div>
-                <div class="task-list">
-                    <div class="task-item"><b>Team Sync Agenda:</b><br>• Discuss launch timeline<br>• Review feedback</div>
+                <div class="task-list" id="widgetNotesList">
+                    <div class="task-item">Loading notes...</div>
                 </div>
             </div>
         </div>
@@ -405,6 +403,8 @@
                     document.getElementById('profAge').value = user.age || '';
                     document.getElementById('profGender').value = user.gender || '';
                     document.getElementById('profPhone').value = user.phone_number || '';
+                    
+                    fetchDashboardData();
                 } else if(res.status === 401) {
                     // Token expired
                     localStorage.removeItem('productivity_token');
@@ -443,6 +443,75 @@
                     alert("Failed to update profile.");
                 }
             } catch(e) { alert("Error"); }
+        }
+
+        // --- Dashboard Logic ---
+        async function fetchDashboardData() {
+            if(!authToken) return;
+            try {
+                // Fetch Tasks
+                let res = await fetch('/api/v1/dashboard/tasks', { headers: { 'Authorization': `Bearer ${authToken}` }});
+                if(res.ok) {
+                    let tasks = await res.json();
+                    let html = tasks.length ? '' : '<div class="task-item">No upcoming tasks!</div>';
+                    tasks.forEach(t => {
+                        html += `<div class="task-item"><b>${t.title}</b> <em style="color:var(--text-dim);font-size:11px;">[${t.status}]</em></div>`;
+                    });
+                    document.getElementById('widgetTasksList').innerHTML = html;
+                }
+                
+                // Fetch Notes
+                res = await fetch('/api/v1/dashboard/notes', { headers: { 'Authorization': `Bearer ${authToken}` }});
+                if(res.ok) {
+                    let notes = await res.json();
+                    let html = notes.length ? '' : '<div class="task-item">No recent notes.</div>';
+                    notes.forEach(n => {
+                        html += `<div class="task-item">📝 ${n.title}</div>`;
+                    });
+                    document.getElementById('widgetNotesList').innerHTML = html;
+                }
+
+                // Fetch Events for Calendar
+                res = await fetch('/api/v1/dashboard/events', { headers: { 'Authorization': `Bearer ${authToken}` }});
+                if(res.ok) {
+                    let events = await res.json();
+                    let eventDays = new Set();
+                    events.forEach(e => {
+                        try {
+                            let d = new Date(e.start_time);
+                            if(!isNaN(d)) eventDays.add(d.getDate());
+                        } catch(err) {}
+                    });
+                    
+                    let calHtml = '';
+                    const days = ['Su', 'M', 'T', 'W', 'Th', 'F', 'Sa'];
+                    days.forEach(d => calHtml += `<div style="font-weight:600; color:var(--text);">${d}</div>`);
+                    for(let i=1; i<=31; i++) {
+                        let cls = "cal-day";
+                        if(i === window.CURRENT_DATE_SIM) cls += " active";
+                        let stl = eventDays.has(i) && i !== window.CURRENT_DATE_SIM ? 'border:1px solid var(--accent);' : '';
+                        calHtml += `<div class="${cls}" style="${stl}">${i}</div>`;
+                    }
+                    document.getElementById('calGrid').innerHTML = calHtml;
+                }
+            } catch(e) { console.log("Failed to fetch dashboard data."); }
+        }
+
+        // Navigation Actions
+        function clickNav(agent, el) {
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            el.classList.add('active');
+            const chatInput = document.getElementById('chatInput');
+            if(agent !== 'dashboard') {
+                chatInput.value = `Hey ${agent}, `;
+            }
+            chatInput.focus();
+        }
+
+        function clickNewTask() {
+            const chatInput = document.getElementById('chatInput');
+            chatInput.value = "Create a task to ";
+            chatInput.focus();
         }
 
         // --- Chat Logic ---
@@ -498,6 +567,7 @@
                 const data = await res.json();
                 if(res.ok) {
                     appendMessage('ai', data.response, data.agents_used);
+                    fetchDashboardData();
                 } else {
                     appendMessage('ai', 'Error: ' + JSON.stringify(data.detail));
                 }
