@@ -26,7 +26,8 @@ from fastapi.security import OAuth2PasswordBearer
 from langchain_core.messages import AIMessage, HumanMessage
 import jwt
 import json
-from passlib.context import CryptContext
+import hashlib
+import secrets
 from datetime import datetime, timedelta
 
 from agents.supervisor import build_multi_agent_graph, API_KEYS
@@ -82,7 +83,6 @@ SECRET_KEY = os.getenv("JWT_SECRET_KEY", "super-secret-hackathon-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 1 week
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 import tempfile
@@ -102,10 +102,16 @@ def save_users(users):
         json.dump(users, f, indent=4)
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + password).encode()).hexdigest()
+    return f"{salt}${hashed}"
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        salt, hashed = hashed_password.split("$", 1)
+        return hashlib.sha256((salt + plain_password).encode()).hexdigest() == hashed
+    except Exception:
+        return False
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
