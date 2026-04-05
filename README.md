@@ -25,6 +25,7 @@ User ──▶ FastAPI ──▶ Supervisor Agent (Gemini 2.0 Flash)
 | **LLM Engine** | Gemini 2.0 Flash | Natural language understanding & tool calling |
 | **Tool Protocol** | MCP-style Registry | Standardised tool discovery & execution |
 | **Database** | SQLAlchemy + SQLite | Structured data persistence |
+| **Auth System** | JSON Storage + BCrypt | Local User Profiles management |
 
 ## 📁 Project Structure
 
@@ -43,7 +44,8 @@ genai-productivity-assistant/
 │   └── mcp_registry.py     # MCP tool registry
 ├── database/
 │   ├── db.py               # SQLAlchemy engine & session
-│   └── models.py           # ORM models (Task, Event, Note)
+│   ├── models.py           # ORM models (Task, Event, Note)
+│   └── users.json          # Local Auth storage
 ├── models/
 │   └── schemas.py          # Pydantic request/response schemas
 ├── static/
@@ -93,10 +95,14 @@ gcloud run deploy productivity-assistant \
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `POST` | `/api/v1/auth/register` | Register a new user profile |
+| `POST` | `/api/v1/auth/login` | Authenticate and receive JWT |
+| `GET/PUT` | `/api/v1/profile` | Read or Update personal details |
+| `GET` | `/api/v1/dashboard/*` | Fetch live data for widget rendering |
 | `POST` | `/api/v1/chat` | Send a message to the multi-agent system |
 | `GET` | `/api/v1/tools` | MCP-style tool discovery |
 | `GET` | `/api/v1/health` | Health check |
-| `GET` | `/` | Chat UI |
+| `GET` | `/` | Dashboard & Chat UI |
 
 ### Example Request
 
